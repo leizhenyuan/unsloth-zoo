@@ -27,6 +27,7 @@ __all__ = [
 
 from .compiler import UNSLOTH_COMPILE_LOCATION
 from .utils import _get_dtype
+from unsloth import DEVICE_TYPE
 
 # Also disable compiling on bitsandbytes
 def patch_compiling_bitsandbytes():
@@ -212,15 +213,16 @@ def patch_model_and_tokenizer(
 
     # Also patch all dtypes - BnB seems to not allocate the correct type?
     # BnB default dtype seems to be float16!
-    try:
-        from bitsandbytes.nn  import Linear4bit as Bnb_Linear4bit
-    except:
-        raise ImportError("Unsloth: Please install bitsandbytes via `pip install bitsandbytes`")
-    try:
-        from peft.tuners.lora import Linear4bit as Peft_Linear4bit
-    except:
-        raise ImportError("Unsloth: Please install peft via `pip install peft`")
-    pass
+    if DEVICE_TYPE == "cuda":
+        try:
+            from bitsandbytes.nn  import Linear4bit as Bnb_Linear4bit
+        except:
+            raise ImportError("Unsloth: Please install bitsandbytes via `pip install bitsandbytes`")
+        try:
+            from peft.tuners.lora import Linear4bit as Peft_Linear4bit
+        except:
+            raise ImportError("Unsloth: Please install peft via `pip install peft`")
+        pass
 
     # Get most likely the correct data-type of the model
     try:
@@ -267,7 +269,7 @@ def patch_model_and_tokenizer(
     pass
     # Check all params and patch!
     for name, module in model.named_modules():
-        if isinstance(module, (Bnb_Linear4bit, Peft_Linear4bit)):
+        if DEVICE_TYPE == "cuda" and isinstance(module, (Bnb_Linear4bit, Peft_Linear4bit)):
             weight = module.weight
             quant_state = weight.quant_state
 

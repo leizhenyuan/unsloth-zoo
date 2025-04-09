@@ -60,8 +60,8 @@ UNSLOTH_COMPILE_USE_TEMP = False
 
 # Disable some compilations if old versions are seen
 OLD_TORCH_VERSION = Version(torch.__version__) < Version("2.5.0")
-major, minor = torch.cuda.get_device_capability()
-OLD_CUDA_ARCH_VERSION = (major <= 7) and (minor < 5)
+# major, minor = torch.cuda.get_device_capability()
+OLD_CUDA_ARCH_VERSION = False
 OLD_TRITON_VERSION = Version(triton.__version__) < Version("3.0.0")
 
 # Check if Unsloth Studio is allowed

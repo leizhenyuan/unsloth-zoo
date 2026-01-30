@@ -23,7 +23,7 @@ import inspect
 import os
 import numpy as np
 from typing import Union, Callable, Optional, List, Dict
-from .device_type import DEVICE_TYPE
+from .device_type import DEVICE_TYPE, device_synchronize
 from .temporary_patches.common import torch_compile_options
 RL_REPLACEMENTS = dict()
 
@@ -264,6 +264,66 @@ def autotune_batch_and_chunks(
 
     return final_b, final_m
 
+RL_REPLACEMENTS["grpo_autotune_batch_and_chunks"] = autotune_batch_and_chunks
+
+
+def autotune_batch_and_chunks(
+    total_input_rows, 
+    seq_len, 
+    hidden_size, 
+    vocab_size, 
+    dtype_bytes=16,
+    multiplier=None
+):
+    if multiplier is None:
+        final_m = max(4, seq_len // 4096)
+    else:
+        final_m = multiplier
+    
+    # Get free memory based on device type
+    if DEVICE_TYPE == "cuda" and torch.cuda.is_available():
+        free_bytes, _ = torch.cuda.mem_get_info()
+        limit_gb = (free_bytes / (1024**3)) * 0.80
+    elif DEVICE_TYPE == "xpu" and hasattr(torch, "xpu") and torch.xpu.is_available():
+        # For XPU, use memory_reserved as approximation for available memory
+        # Note: XPU doesn't have direct mem_get_info equivalent
+        try:
+            import intel_extension_for_pytorch  # noqa: F401
+            # Get total memory and subtract reserved
+            total_memory = torch.xpu.get_device_properties(0).total_memory
+            reserved_memory = torch.xpu.memory_reserved()
+            free_bytes = total_memory - reserved_memory
+            limit_gb = (free_bytes / (1024**3)) * 0.80
+        except:
+            # Fallback: assume 80% of a typical XPU memory (48GB for PVC)
+            limit_gb = 38.0  # 48GB * 0.80
+    else:
+        # Fallback for other devices or when no GPU is available
+        limit_gb = 16.0  # Conservative default
+
+    bytes_to_gb = 1024**3
+
+    b_vals = torch.arange(total_input_rows, 0, -1, device='cpu', dtype=torch.float32)
+
+    hidden_gb = (b_vals * seq_len * hidden_size * dtype_bytes) / bytes_to_gb
+
+    base_logits = ((b_vals/total_input_rows) * b_vals * seq_len * vocab_size * dtype_bytes) / bytes_to_gb
+    logits_gb = base_logits / final_m
+
+    total_mem_gb = hidden_gb + logits_gb
+    
+    valid_mask = total_mem_gb <= limit_gb
+    valid_indices = torch.nonzero(valid_mask, as_tuple=False)
+
+    if valid_indices.shape[0] == 0:
+        # This means your GPU will OOM
+        return 4, final_m
+
+    best_idx = valid_indices[0].item()
+    final_b = int(b_vals[best_idx].item())
+
+    return final_b, final_m
+pass
 RL_REPLACEMENTS["grpo_autotune_batch_and_chunks"] = autotune_batch_and_chunks
 
 
@@ -892,7 +952,7 @@ def grpo_accumulated_loss(
                 )
                 #This is needed to avoid race conditions with GPT OSS offload_embbed=True
                 #However, it seems that this line does not slow down or disrupt models. 
-                torch.cuda.synchronize()
+                device_synchronize()
             all_logprobs_list.append(logprobs_chunk)
 
     new_logprobs = torch.cat(all_logprobs_list, dim=0)
